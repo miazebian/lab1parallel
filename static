@@ -1,0 +1,86 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <mpi.h>
+#include <time.h>
+
+#define MASTER_RANK 0
+
+void calculate_mandelbrot(int width, int height, int start_row, int end_row, double left, double right, double lower, double upper, int* output) {
+    int max_iterations = 1000;
+    double x, y, x_new, y_new, x_squared, y_squared;
+    int iteration;
+    
+    for (int row = start_row; row < end_row; row++) {
+        for (int col = 0; col < width; col++) {
+            x = left + (right - left) * col / width;
+            y = lower + (upper - lower) * row / height;
+            x_new = 0.0;
+            y_new = 0.0;
+            x_squared = 0.0;
+            y_squared = 0.0;
+            iteration = 0;
+            
+            while (x_squared + y_squared < 4.0 && iteration < max_iterations) {
+                y_new = 2 * x_new * y + y;
+                x_new = x_squared - y_squared + x;
+                x_squared = x_new * x_new;
+                y_squared = y_new * y_new;
+                iteration++;
+            }
+            
+            output[row * width + col] = iteration;
+        }
+    }
+}
+
+int main(int argc, char** argv) {
+    clock_t start, end;
+    double cpu_time_used;
+    
+    int num_columns = 800, num_rows = 800;
+    double min_x = -2.0, max_x = 1.0, min_y = -1.5, max_y = 1.5;
+    int max_iterations = 1000;
+    
+    int rank, num_procs;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    
+    int rows_per_proc = num_rows / num_procs;
+    int start_row = rank * rows_per_proc;
+    int end_row = (rank + 1) * rows_per_proc;
+    if (rank == num_procs - 1) {
+        end_row = num_rows;
+    }
+    int num_rows_local = end_row - start_row;
+    
+    int* local_output = (int*) malloc(num_rows_local * num_columns * sizeof(int));
+    calculate_mandelbrot(num_columns, num_rows, start_row, end_row, min_x, max_x, min_y, max_y, local_output);
+    
+    int* global_output = NULL;
+    if (rank == MASTER_RANK) {
+        global_output = (int*) malloc(num_columns * num_rows * sizeof(int));
+    }
+    
+    MPI_Gather(local_output, num_rows_local * num_columns, MPI_INT, global_output, num_rows_local * num_columns, MPI_INT, MASTER_RANK, MPI_COMM_WORLD);
+    
+    if (rank == MASTER_RANK) {
+        FILE* fp = fopen("mandelbrot.pgm", "wb");
+        fprintf(fp, "P2\n%d %d\n%d\n", num_columns, num_rows, max_iterations - 1);
+        for (int row = 0; row < num_rows; row++) {
+            for (int col = 0; col < num_columns; col++) {
+                fprintf(fp, "%d ", global_output[row * num_columns + col]);
+            }
+            fprintf(fp, "\n");
+        }
+        fclose(fp);
+        free(global_output);
+    }
+    
+    free(local_output);
+    
+    MPI_Finalize();
+    
+    return 0;
+    }
